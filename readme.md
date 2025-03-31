@@ -8,9 +8,8 @@
 1) Резюме [клик](0_resume)
 2) Отклик [клик](1_apply)
 3) Интервью [клик](2_interview)
-4) Ревью интервью 
-5) ???
-6) Оффер
+4) ???
+5) Оффер
 
 ## Contribution
 If you'd like to contribute in this project, either it ll be better prompt, formatting, refined code, suggestion, or whatever, you can either:
