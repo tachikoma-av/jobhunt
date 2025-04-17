@@ -38,7 +38,7 @@ async function fillForm() {
   })
   console.log(JSON.stringify(questions, null, 4))
   // scroll to element
-  question_elements[index].querySelector(`div [data-interactive="true"]`).scrollIntoView()
+  question_elements[index].querySelector(`div [data-interactive="true"]`).scrollIntoView();
 
   // tap on input field
 
@@ -58,11 +58,16 @@ function getPositionDescription(){
     company: ``,
     description: ``,
   };
+  let description_selector = document.querySelector(`div.tmpl-hh-wrapper`);
+  if (description_selector == null){
+    description_selector = document.querySelector('[data-qa="vacancy-description"]');
+  }
+
   position.title = document.querySelector('[data-qa="vacancy-title"]').textContent;
   position.company = document.querySelector('[data-qa="vacancy-company-name"]')?.textContent;
-  position.description = document.querySelector('[data-qa="vacancy-description"]').textContent;
+  position.description = description_selector.textContent;
   return position;
-}
+};
 
 class HHru extends JobApplicant {
   constructor(){
@@ -70,13 +75,13 @@ class HHru extends JobApplicant {
     this.temp = new Datastore({filename : 'data/hh_temp.json', autoload: true });
   }
   async prepare(){
-    await this.main_page.goto("https://hh.ru", { "waitUntil": 'domcontentloaded'});
+    await this.main_page.goto("https://hh.ru", { "waitUntil": 'domcontentloaded', "timeout": 100000});
     const authenticated = await this.main_page.evaluate( ()=> document.querySelector(`[data-qa="login"]`) == null )
     if (authenticated == false){
       throw "[HHru.prepare] not authenticated on hh.ru";
     }
 
-  }
+  };
   async topUpResumes() {
     const page = this.main_page;
     await page.evaluate(()=>{
@@ -95,10 +100,93 @@ class HHru extends JobApplicant {
         }
       }
     })
-  }
-  async getPositionsFromUrl(position_uri){
+  };
+  async readAllRejectedInChats(){
     const page = this.main_page;
-    await page.goto(position_uri, { "waitUntil": 'domcontentloaded'});
+    const chat_button_selector = `span[data-qa="chatikActivator-badge"]`;
+
+    const num_of_unread = await page.evaluate( (chat_button_selector)=>{
+      chat_el = document.querySelector(chat_button_selector);
+      if (chat_el == null){
+        return 0;
+      } else {
+        return Number(chat_el.textContent);
+      }
+    }, chat_button_selector);
+    console.log(`[HH.readAllRejectedInChats] num_of_unread: ${num_of_unread}`)
+
+    if (num_of_unread < 50){
+      console.log(`[HH.readAllRejectedInChats] num_of_unread < 50, not reading`);
+      return false;
+    };
+
+    await page.evaluate( (chat_button_selector)=>{
+      document.querySelector(chat_button_selector).click();
+    }, chat_button_selector);
+
+    await page.waitForSelector('iframe.chatik-integration-iframe_loaded');
+
+
+    let _i = 0
+    let chat_frame = page.frames().find(el=>{
+      return el.url().includes(`https://chatik.hh.ru/`);
+    });
+    while (true){
+      _i+=1;
+      if (_i > 30){
+        throw `stuck modal window`
+      };
+
+      
+      if (chat_frame != null){
+        const frame_loaded = await chat_frame.evaluate( ()=>{
+          return (document.querySelector(`div[class$=___chats`) != null)
+        });
+        if (frame_loaded) break;
+      } else {
+        chat_frame = page.frames().find(el=>{
+          return el.url().includes(`https://chatik.hh.ru/`);
+        });
+      }
+
+      await new Promise(r => setTimeout(r, 2000));
+    };
+
+    // click unread only if needed
+    await chat_frame.evaluate( async ()=>{
+      unchecked_clicked = !( document.querySelector(`input[data-qa="chatik-checkbox-only-unread"]`).getAttribute(`class`).includes(`unchecked`) )
+      if (unchecked_clicked == false){
+        document.querySelector(`input[data-qa="chatik-checkbox-only-unread"]`).click()
+
+        // check if chats reappeared
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    })
+
+    while (true){
+      const opened_rejected = await page.evaluate( ()=>{
+        dialogues_window = document.querySelector('[class$="__chats"]');
+        dialogues = Array.from(dialogues_window.children);
+        let res = false;
+        for (let el of dialogues){
+          let is_reject = (el.querySelector(`[class$=___last-message-color_red`) != null)
+          if (is_reject){
+            el.click()
+            res = true;
+            break;
+          }
+        }
+        return res;
+      });
+      if (opened_rejected == false){
+        break;
+      } else {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    };
+    return true;
+  };
+  async getPositionsFromPage(page){
     const positions = await page.evaluate( () => {
       positions_buttons = document.querySelectorAll(`[data-qa="vacancy-serp__vacancy_response"]`);
       const COMPANY_NAME_SELECTORS = [
@@ -128,7 +216,7 @@ class HHru extends JobApplicant {
       return positions;
     })
     return positions;
-  }
+  };
   filterPositions(positions) {
     let position_names = [];
     let filtered_positions = [];
@@ -152,7 +240,8 @@ class HHru extends JobApplicant {
       for (let pos of positions_to_ignore){
         if (pos.name == el.name && pos.company_name == el.company_name){
           can_apply = false;
-          break
+          console.log(`[HHru.filterPositions] skipping cos used ${JSON.stringify(el)} `)
+          break;
         }
       }
       if (!can_apply){
@@ -165,7 +254,8 @@ class HHru extends JobApplicant {
     return filtered_positions;
   }
   async applyForPosition(position, page){
-    await page.goto(position.href, { "waitUntil": 'domcontentloaded'})
+    await page.goto(position.href, { "waitUntil": 'domcontentloaded', "timeout":100000});
+    await page.waitForSelector('[data-qa="vacancy-title"]', {timeout:100000});
     let position_description = await page.evaluate(getPositionDescription);
     // click apply
     await page.evaluate(()=>{
@@ -199,9 +289,9 @@ class HHru extends JobApplicant {
           }
           // TODO sometimes it asks to fill some additional forms
           let modal_element = document.querySelector(`[data-qa="modal-header"]`);
-          if (modal_element != null){
+          let external_redirect = document.querySelector(`[data-qa="vacancy-response-link-advertising"]`);
+          if (modal_element != null || external_redirect != null){
             return `modal_appeared`;
-            
           }
           return ``;
         })
@@ -267,18 +357,18 @@ class HHru extends JobApplicant {
         throw `unknown button text ${action_bar_button_text}`;
     }
 
-    const is_match = await this.llm.findIfPositionFitsMe(position_description.description, this.settings.USER.INFO, this.settings.USER.RESUME, this.settings.USER.PREFERENCIES);
+    const is_match = await this.llm.findIfPositionFitsMe(position_description.description, this.settings.USER.INFO, this.settings.USER.RESUME, this.settings.USER.PREFERENCES);
     if (is_match.result == false){
       this.temp.insert({"name": position.name, "company_name": position.company_name, "status": TEMP_STATUS_CODES.rejected})
       return false;
     }
 
-    let cover_letter = await this.llm.generateCoverLetter(position_description, this.settings.USER.INFO, this.settings.USER.RESUME, this.settings.USER.NAME);
+    let cover_letter = await this.llm.generateCoverLetter_proto(position_description, this.settings.USER.INFO, this.settings.USER.RESUME, this.settings.USER.NAME);
     if (cover_letter == null){
       this.temp.insert({"name": position.name, "company_name": position.company_name, "status": TEMP_STATUS_CODES.couldnt_generate_cover_letter})
       return false;
     }
-    console.log(`[hh.applyForPosition] applying with coverletter ${cover_letter}`)
+    console.log(`[HH.applyForPosition] applying with coverletter ${cover_letter}`)
     await page.keyboard.type(cover_letter);
     await new Promise(r => setTimeout(r, 2000));
     await page.evaluate( () =>{
@@ -294,33 +384,65 @@ class HHru extends JobApplicant {
 
     this.temp.insert({"name": position.name, "company_name": position.company_name, "cover_letter": cover_letter, "status": TEMP_STATUS_CODES.applied});
     return true;
-  }
+  };
+
   async work(){
     if (false){
       await this.topUpResumes();
-    }
+    };
+    if (false){
+      await this.readAllRejectedInChats();
+    };
+
     let applied_for_count = 0;
     for (const position_uri of this.settings.HH.SEARCH_QUERIES){
       console.log(`[HH.work] applying for queries in ${position_uri}`)
-      let positions = await this.getPositionsFromUrl(position_uri);
-      positions = this.filterPositions(positions);
-      // positions = await this.llm.filterPositions(positions);
-      for (let position of positions){
-        const position_page =  await this.newPage();
-        const applied = await this.applyForPosition(position, position_page);
-        await position_page.close()
-
-        if (applied){
-          applied_for_count+=1;
-          console.log(`[HH.work] applied for ${applied_for_count} positions this session`)
-          if (applied_for_count > 100){
-            return;            
+      await this.main_page.goto(position_uri, { "waitUntil": 'domcontentloaded', "timeout": 100000});
+      let has_next = true;
+      while(has_next){
+        let positions = await this.getPositionsFromPage(this.main_page);
+        positions = this.filterPositions(positions);
+        positions = await this.llm.filterPositions(positions, this.settings.USER.INFO, this.settings.USER.RESUME, this.settings.USER.PREFERENCES);
+        for (let position of positions){
+          const position_page =  await this.newPage();
+          const applied = await this.applyForPosition(position, position_page);
+          await position_page.close()
+  
+          if (applied){
+            applied_for_count+=1;
+            console.log(`[HH.work] applied for ${applied_for_count} positions this session`)
+            if (applied_for_count > 100){
+              return;            
+            }
           }
         }
 
-      }
-    }
-  }
+        let next_url = await this.main_page.evaluate( ()=>{
+          let paginator_selector = document.querySelector(`[data-qa="pager-block"]`);
+          if (paginator_selector == null){
+            return `no_next`;
+          };
+          let arr = Array.from(document.querySelector(`[data-qa="pager-block"]`).querySelectorAll(`[data-qa="pager-page"]`));
+          let is_next = false;
+          for (const obj of arr) {
+            if (is_next) {
+              return obj.href;
+            };
+            if(obj.getAttribute(`aria-current`) == `true`) is_next = true;
+          };
+          return `no_next`;
+        })
+        if (next_url == `no_next`){
+          has_next = false;
+        } else {
+          await this.main_page.goto(next_url, {timeout: 100000, waitUntil:`domcontentloaded`});
+          console.log(`[HHru.work] next page for ${position_uri}`)
+          has_next = true;
+        }
+      };
+    };
+    console.log(`[HHru.work] done, applied for ${applied_for_count}`)
+  };
 }
 
 

@@ -9,7 +9,7 @@ class JobApplicant{
     
     // playwright
     const new_page = await this.browser.contexts()[0].newPage();
-    await new_page.route('**/*.{png,jpg,jpeg}', route => route.abort());
+    await new_page.route('**/*.{png,jpg,jpeg,svg}', route => route.abort());
 
     // puppeteer
     // const new_page = await this.browser.newPage();
